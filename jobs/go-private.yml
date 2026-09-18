@@ -1,0 +1,31 @@
+# Credentials for private Go modules. OPT-IN.
+#
+# Most library repositories need nothing here. Reference it only from a
+# repository that imports a module from gitlab.internal or 10.0.0.50:
+#
+#   lint:
+#     before_script:
+#       - !reference [.aioz-go-private, before_script]
+#       - !reference [.aioz-lint, before_script]
+#
+# Order matters: the credentials must be in place before the lint job's own
+# `go list` fetch runs.
+#
+# Two spellings of the one internal GitLab: gitlab.internal is the private
+# domain for 10.0.0.50, so the same job token authenticates both, and a module
+# imported by its gitlab.internal path fails against proxy.golang.org without
+# the rewrite for that spelling too.
+#
+# `--add` on every `insteadOf` is load-bearing. Without it each call overwrites
+# the previous one instead of appending, and only the last rewrite survives.
+#
+# The project owning the private module must allowlist the consuming project
+# under Settings -> CI/CD -> Job token permissions -> Allowlist, or the clone
+# returns 403 with a message that does not mention the allowlist.
+.aioz-go-private:
+  before_script:
+    - go env -w GOPRIVATE="${GO_PRIVATE_HOSTS}"
+    - git config --global --add url."https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.internal/".insteadOf "https://gitlab.internal/"
+    - git config --global --add url."https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.internal/".insteadOf "git@gitlab.internal:"
+    - git config --global --add url."https://gitlab-ci-token:${CI_JOB_TOKEN}@10.0.0.50/".insteadOf "https://10.0.0.50/"
+    - git config --global --add url."https://gitlab-ci-token:${CI_JOB_TOKEN}@10.0.0.50/".insteadOf "git@10.0.0.50:"

@@ -1,0 +1,59 @@
+# go test, blocking.
+#
+# -race is not optional. A data race is invisible without the detector, and the
+# detector needs cgo - which is why this is the one job with CGO_ENABLED=1.
+
+.aioz-test:
+  image: ${GO_IMAGE}
+  tags:
+    - ${RUNNER_TAG}
+  variables:
+    GOMODCACHE: "${CI_PROJECT_DIR}/.cache/go-mod"
+    GOCACHE: "${CI_PROJECT_DIR}/.cache/go-build"
+    CGO_ENABLED: "1"
+  cache:
+    key: "go-test-$CI_COMMIT_REF_SLUG"
+    policy: pull-push
+    paths:
+      - .cache/
+  before_script:
+    # Same fast-fail as the lint job: fetch what ./... imports so an
+    # unreachable private module dies here with git's own error.
+    - |
+      tagflag=""
+      if [ -n "${BUILD_TAGS}" ]; then tagflag="-tags ${BUILD_TAGS}"; fi
+      # shellcheck disable=SC2086
+      go list ${tagflag} -deps ./... > /dev/null
+
+test:
+  extends:
+    - .aioz-rules
+    - .aioz-test
+  stage: test
+  script:
+    # Generated output first: a handler that changed its contract without
+    # regenerating its spec ships documentation describing an API that no
+    # longer exists, and that is cheaper to catch than a test failure.
+    - |
+      if [ -n "${GENERATE_VERIFY_CMD}" ]; then
+        echo "+ ${GENERATE_VERIFY_CMD}"
+        sh -c "${GENERATE_VERIFY_CMD}"
+      else
+        echo "GENERATE_VERIFY_CMD not set; skipping generated-output check"
+      fi
+    # Then compile test code behind build tags that the test run itself never
+    # builds (integration, and similar). A rename they depend on otherwise
+    # stays green until someone runs them by hand months later.
+    - |
+      if [ -n "${TEST_BUILD_CMD}" ]; then
+        echo "+ ${TEST_BUILD_CMD}"
+        sh -c "${TEST_BUILD_CMD}"
+      else
+        echo "TEST_BUILD_CMD not set; skipping test-only build"
+      fi
+    - |
+      tagflag=""
+      if [ -n "${BUILD_TAGS}" ]; then tagflag="-tags ${BUILD_TAGS}"; fi
+      # shellcheck disable=SC2086
+      go test -race ${tagflag} ./...
+  allow_failure: false

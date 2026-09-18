@@ -1,0 +1,15 @@
+# Lint rules for the template's own YAML.
+#
+# Line length is off: these files carry long explanatory comments and
+# digest-pinned image references, and wrapping either makes them worse.
+extends: default
+
+rules:
+  line-length: disable
+  comments:
+    min-spaces-from-content: 1
+  truthy:
+    # GitLab CI has no `on:` key; the default check only exists for GitHub
+    # Actions and would flag nothing here.
+    check-keys: false
+  document-start: disable
