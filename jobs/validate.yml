@@ -1,0 +1,148 @@
+# Four scanners: vulnerable code that is actually called, secrets in git,
+# vulnerable dependencies and secrets in files, and Dockerfile lint.
+#
+# NON-BLOCKING FOR NOW. Every job here sets allow_failure, so a finding shows
+# as a yellow warning on the pipeline and in the merge request, and does not
+# stop the merge.
+#
+# Why: the older libraries carry a backlog of findings nobody has triaged yet,
+# and govulncheck in particular reports transitive vulnerabilities that cannot
+# be fixed from the repository reporting them. Blocking today would leave every
+# pipeline permanently red, which teaches people to ignore the whole stage -
+# the exact failure mode this template exists to remove.
+#
+# This is temporary. A repository that has cleared its findings should enforce
+# them, one job at a time, in its own .gitlab-ci.yml:
+#
+#   validate:gitleaks:
+#     allow_failure: false
+#
+# Deliberately a per-job override rather than a VALIDATE_ALLOW_FAILURE
+# variable: GitLab requires `allow_failure` to be a boolean literal, so a
+# variable-driven switch means duplicating every ref rule into a blocking and a
+# warning variant. One line per job reads honestly on the pipeline page.
+
+.aioz-validate:
+  extends: .aioz-rules
+  stage: validate
+  tags:
+    - ${RUNNER_TAG}
+  allow_failure: true
+
+# Known vulnerabilities, but only in code the service actually calls:
+# govulncheck follows the call graph, so a vulnerable function nobody reaches
+# does not fail the job. It checks the standard library too, which is why
+# GO_IMAGE has a floor.
+#
+# govulncheck has no ignore file. An unfixable finding cannot be suppressed,
+# only accepted - which is the strongest reason this stage warns rather than
+# blocks.
+validate:govulncheck:
+  extends: .aioz-validate
+  image: ${GO_IMAGE}
+  variables:
+    GOMODCACHE: "${CI_PROJECT_DIR}/.cache/go-mod"
+    GOCACHE: "${CI_PROJECT_DIR}/.cache/go-build"
+  cache:
+    key: "govulncheck-$CI_COMMIT_REF_SLUG"
+    policy: pull-push
+    paths:
+      - .cache/
+  script:
+    - |
+      tagflag=""
+      if [ -n "${BUILD_TAGS}" ]; then tagflag="-tags ${BUILD_TAGS}"; fi
+      # shellcheck disable=SC2086
+      go run "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}" ${tagflag} ./...
+  allow_failure: true
+
+# Secrets committed to git.
+#
+# On a merge request, only the commits it adds - so a clean MR stays clean even
+# in a repository with a dirty history. On a branch or tag pipeline, the whole
+# history, which is where an old secret that still works is found.
+#
+# GIT_DEPTH: 0 is required: the default shallow clone has no history to scan.
+#
+# Accepted historical findings belong in .gitleaksignore, each with a reason. A
+# new finding means rotate the secret first, then decide.
+validate:gitleaks:
+  extends: .aioz-validate
+  image:
+    name: ${GITLEAKS_IMAGE}
+    entrypoint: [""]
+  variables:
+    GIT_DEPTH: "0"
+  script:
+    - |
+      if [ -n "${CI_MERGE_REQUEST_DIFF_BASE_SHA:-}" ]; then
+        log_opts="${CI_MERGE_REQUEST_DIFF_BASE_SHA}..${CI_COMMIT_SHA}"
+      else
+        log_opts="--all"
+      fi
+      gitleaks git --no-banner --redact --verbose \
+        --log-opts="${log_opts}" \
+        --report-format junit --report-path gitleaks-report.xml \
+        .
+  artifacts:
+    when: always
+    reports:
+      junit: gitleaks-report.xml
+    expire_in: 1 week
+
+# Vulnerable dependencies, secrets in files, and misconfiguration in
+# Dockerfiles and compose files.
+#
+# HIGH and CRITICAL only, and only findings with a fix available: an unfixable
+# finding would fail every pipeline until upstream moves, and a job that is
+# always red is a job nobody reads.
+#
+# Accepted findings go in .trivyignore.yaml with a reason and an expiry.
+validate:trivy-fs:
+  extends: .aioz-validate
+  image:
+    name: ${TRIVY_IMAGE}
+    entrypoint: [""]
+  variables:
+    TRIVY_CACHE_DIR: "${CI_PROJECT_DIR}/.cache/trivy"
+    TRIVY_NO_PROGRESS: "true"
+  cache:
+    # Not keyed by ref: the vulnerability database is the same for every branch
+    # and is expensive to download.
+    key: trivy-db
+    paths:
+      - .cache/trivy
+  script:
+    - |
+      ignorefile=""
+      if [ -f .trivyignore.yaml ]; then ignorefile="--ignorefile .trivyignore.yaml"; fi
+      # shellcheck disable=SC2086
+      trivy fs --scanners vuln,secret,misconfig \
+        --severity HIGH,CRITICAL --ignore-unfixed \
+        ${ignorefile} \
+        --exit-code 1 --skip-dirs "${TRIVY_SKIP_DIRS}" \
+        .
+
+# Dockerfile lint: tags pinned, no root, no secrets in ENV, and the rest of
+# hadolint's rules. Warnings fail the job; info-level findings do not.
+#
+# Matches both `Dockerfile*` and `*.Dockerfile`, because deploy/docker/api.Dockerfile
+# is a real naming convention here and the first pattern alone would miss it -
+# and a scanner that finds no file passes in silence.
+#
+# A library repository legitimately has no Dockerfile, so no file found exits 0
+# with a notice rather than failing.
+validate:hadolint:
+  extends: .aioz-validate
+  image: ${HADOLINT_IMAGE}
+  script:
+    - |
+      files="$(find . \( -name 'Dockerfile*' -o -name '*.Dockerfile' \) \
+        -not -path './.git/*' -not -path './.cache/*')"
+      if [ -z "$files" ]; then
+        echo "no Dockerfile in this repository; nothing to lint"
+        exit 0
+      fi
+      echo "$files"
+      # shellcheck disable=SC2086
+      hadolint --failure-threshold warning $files

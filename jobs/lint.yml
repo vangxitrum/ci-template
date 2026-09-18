@@ -1,0 +1,70 @@
+# golangci-lint, blocking.
+#
+# A finding fails the job and the pipeline. For that to actually stop a merge,
+# tick Settings -> Merge requests -> "Pipelines must succeed" on the project;
+# without it a red pipeline is only a red icon next to a live merge button.
+
+.aioz-lint:
+  image: ${GO_IMAGE}
+  tags:
+    - ${RUNNER_TAG}
+  variables:
+    GOMODCACHE: "${CI_PROJECT_DIR}/.cache/go-mod"
+    GOCACHE: "${CI_PROJECT_DIR}/.cache/go-build"
+    GOLANGCI_LINT_CACHE: "${CI_PROJECT_DIR}/.cache/golangci-lint"
+    CGO_ENABLED: "0"
+  cache:
+    key: "golangci-lint-$CI_COMMIT_REF_SLUG"
+    policy: pull-push
+    paths:
+      - .cache/
+  before_script:
+    # Resolve and fetch exactly the modules ./... imports, and fail here if a
+    # private module cannot be reached.
+    #
+    # Without this, a bad or missing token surfaces as a wall of `typecheck`
+    # findings out of golangci-lint - which is what an unreachable dependency
+    # actually looks like in the report - instead of git's own 403.
+    #
+    # Deliberately NOT `go mod download`: that walks the whole module graph
+    # including modules nothing imports, and fails on some of our go.mod files
+    # even with every credential correct.
+    - |
+      tagflag=""
+      if [ -n "${BUILD_TAGS}" ]; then tagflag="-tags ${BUILD_TAGS}"; fi
+      # shellcheck disable=SC2086
+      go list ${tagflag} -deps ./... > /dev/null
+    # Installed with `go install`, NOT the upstream install.sh.
+    #
+    # install.sh from master picks the wrong release asset: the tarball name
+    # golangci-lint-<ver>-linux-amd64.tar.gz is a strict prefix of
+    # golangci-lint-<ver>-linux-amd64.tar.gz.sbom.json, so its non-anchored
+    # match downloads the SBOM, saves it under the tarball's name, and dies on
+    # a checksum mismatch. Retrying cannot fix it.
+    #
+    # `go install` verifies through the Go checksum database instead, needs no
+    # curl, and reuses the module and build caches this job already keeps.
+    - go install "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${GOLANGCI_LINT_VERSION}"
+    - export PATH="$(go env GOPATH)/bin:$PATH"
+    # Names the cause in seconds if the wrong major version landed or
+    # .golangci.yml is malformed, instead of after the whole analysis run.
+    # This is what `make lint-verify` does in repositories that have it; done
+    # here directly so the template needs no Makefile.
+    - golangci-lint --version
+    - golangci-lint config verify
+
+lint:
+  extends:
+    - .aioz-rules
+    - .aioz-lint
+  stage: lint
+  script:
+    - golangci-lint run --output.code-climate.path=gl-code-quality-report.json ./...
+  artifacts:
+    # Required. Without it a failing job uploads nothing, which is exactly the
+    # run whose report someone wants to read.
+    when: always
+    reports:
+      codequality: gl-code-quality-report.json
+    expire_in: 1 week
+  allow_failure: false

@@ -1,0 +1,33 @@
+# The library profile: validate, lint, test.
+#
+# For a Go module that ships no container image - aioz-common, aioz-config,
+# aioz-logger, aioz-stats, go-sdk - and for the checks of a repository whose
+# release flow is out of scope (binaries published over FTP).
+#
+# Usage, in the consuming repository's .gitlab-ci.yml:
+#
+#   include:
+#     - project: tuan.quang.tran/aioz-ci-template
+#       ref: v0.1.0
+#       file: profiles/library.yml
+#
+# That is the whole file for a repository that needs nothing else. See README.md
+# for the variables to override and how to add repository-specific jobs.
+#
+# Name a profile, never a jobs/ file directly: the jobs/ layout is internal and
+# may be rearranged within a major version.
+
+include:
+  - local: jobs/base.yml
+  - local: jobs/go-private.yml
+  - local: jobs/lint.yml
+  - local: jobs/validate.yml
+  - local: jobs/test.yml
+
+# A consuming repository that adds a stage of its own must redeclare this list
+# IN FULL, including these three: GitLab replaces a redefined `stages:` rather
+# than merging it.
+stages:
+  - lint
+  - validate
+  - test

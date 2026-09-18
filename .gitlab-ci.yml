@@ -1,0 +1,127 @@
+# This repository's own pipeline.
+#
+# It cannot usefully run the jobs it ships - there is no Go code here - so it
+# checks the three things that actually break a consumer:
+#
+#   1. the YAML parses and is tidy
+#   2. no YAML anchor sneaks in (see the anchors job for why that matters)
+#   3. every profile expands to a valid pipeline, per GitLab's own linter
+#
+# Without step 3 a broken !reference is discovered in someone else's merge
+# request, which is the worst place to discover it.
+
+stages:
+  - check
+
+variables:
+  # One image for all three jobs: yamllint installs into it, and the CI Lint
+  # call is a stdlib urllib script rather than curl plus jq, which the curl
+  # image does not carry.
+  PYTHON_IMAGE: "python:3.12-alpine"
+
+.check:
+  stage: check
+  tags:
+    - linux
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_TAG
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+yamllint:
+  extends: .check
+  image: ${PYTHON_IMAGE}
+  before_script:
+    - pip install --quiet --no-cache-dir "yamllint==1.35.1"
+  script:
+    - yamllint -c .yamllint.yml .gitlab-ci.yml jobs/ profiles/
+
+# A YAML anchor (&name) and its alias (*name) are resolved by the YAML parser
+# before GitLab merges anything, so an alias CANNOT see an anchor defined in a
+# different file. A template using one works inside its own repository and
+# breaks silently the moment a consumer includes it - the key simply goes
+# missing.
+#
+# `extends:` and `!reference` are resolved by GitLab AFTER the merge and do
+# work across files. This job makes that a rule the repository enforces rather
+# than a fact someone has to remember.
+anchors:
+  extends: .check
+  image: ${PYTHON_IMAGE}
+  script:
+    - |
+      if grep -rnE '(^|[[:space:]])[&*][A-Za-z_][A-Za-z0-9_-]*' jobs/ profiles/; then
+        echo
+        echo "ERROR: YAML anchor or alias found above."
+        echo "Anchors do not resolve across 'include:' boundaries."
+        echo "Use 'extends:' or '!reference [.job, key]' instead."
+        exit 1
+      fi
+      echo "no YAML anchors or aliases; safe to include across repositories"
+
+# Ask GitLab to expand each profile exactly as a consumer would, and assert the
+# result is a valid pipeline.
+#
+# Needs a personal access token with `api` scope in the masked CI/CD variable
+# CI_LINT_TOKEN: the CI Lint endpoint does not accept CI_JOB_TOKEN. Without the
+# variable the job says so and passes, so a fork without the secret is not
+# blocked by it - the yamllint and anchors jobs still run.
+ci-lint:
+  extends: .check
+  image: ${PYTHON_IMAGE}
+  script:
+    - |
+      python3 - <<'PYEOF'
+      import json, os, sys, urllib.error, urllib.request
+      from pathlib import Path
+
+      token = os.environ.get("CI_LINT_TOKEN", "")
+      if not token:
+          print("CI_LINT_TOKEN not set; skipping the GitLab CI Lint check.")
+          print("Add a PAT with api scope as a masked CI/CD variable to enable it.")
+          sys.exit(0)
+
+      api = os.environ["CI_API_V4_URL"]
+      project_id = os.environ["CI_PROJECT_ID"]
+      project_path = os.environ["CI_PROJECT_PATH"]
+      sha = os.environ["CI_COMMIT_SHA"]
+
+      failed = []
+      for profile in sorted(Path("profiles").glob("*.yml")):
+          print(f"=== {profile} ===")
+          # A minimal consumer: include this profile at this exact commit, so
+          # the linter resolves the same jobs a real repository would get.
+          consumer = json.dumps(
+              {"include": [{"project": project_path, "ref": sha, "file": str(profile)}]}
+          )
+          request = urllib.request.Request(
+              f"{api}/projects/{project_id}/ci/lint",
+              data=json.dumps({"content": consumer}).encode(),
+              headers={"PRIVATE-TOKEN": token, "Content-Type": "application/json"},
+              method="POST",
+          )
+          try:
+              with urllib.request.urlopen(request) as response:
+                  result = json.load(response)
+          except urllib.error.HTTPError as error:
+              print(f"  HTTP {error.code}: {error.read().decode(errors='replace')}")
+              failed.append(str(profile))
+              continue
+
+          if result.get("valid"):
+              jobs = ", ".join(sorted(j["name"] for j in result.get("jobs", [])))
+              print(f"  valid; jobs: {jobs or '(none)'}")
+          else:
+              for message in result.get("errors", []) or ["unknown error"]:
+                  print(f"  ERROR: {message}")
+              failed.append(str(profile))
+          for warning in result.get("warnings", []) or []:
+              print(f"  warning: {warning}")
+
+      if failed:
+          print()
+          print("invalid profiles: " + ", ".join(failed))
+          sys.exit(1)
+      print()
+      print("every profile expands to a valid pipeline")
+      PYEOF

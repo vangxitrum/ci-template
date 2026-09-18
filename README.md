@@ -1,93 +1,194 @@
-# AIOZ CI Template
+# aioz-ci-template
 
+Shared GitLab CI jobs for the team's Go repositories. A repository includes a
+profile instead of copying YAML, so a fix to a check reaches every repository
+through one tag bump.
 
+The standard these jobs implement is written up in
+[team-playbook `conventional/ci-cd.md`](https://gitlab.internal/tuan.quang.tran/team-playbook/-/blob/main/conventional/ci-cd.md).
 
-## Getting started
+## Quick start
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
-
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
-
-## Add your files
-
-- [ ] [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-- [ ] [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
-
-```
-cd existing_repo
-git remote add origin https://gitlab.internal/tuan.quang.tran/aioz-ci-template.git
-git branch -M main
-git push -uf origin main
+```yaml
+# .gitlab-ci.yml
+include:
+  - project: tuan.quang.tran/aioz-ci-template
+    ref: v0.1.0
+    file: profiles/library.yml
 ```
 
-## Integrate with your tools
+That is the whole file for a Go module that needs nothing else. It gives you:
 
-- [ ] [Set up project integrations](https://gitlab.internal/tuan.quang.tran/aioz-ci-template/-/settings/integrations)
+| Stage | Job | Blocking? |
+| --- | --- | --- |
+| `lint` | `lint` - golangci-lint, code-quality report inline on the MR | yes |
+| `validate` | `validate:govulncheck` | no, warns |
+| `validate` | `validate:gitleaks` | no, warns |
+| `validate` | `validate:trivy-fs` | no, warns |
+| `validate` | `validate:hadolint` | no, warns |
+| `test` | `test` - `go test -race ./...` | yes |
 
-## Collaborate with your team
+Jobs run on merge requests, the default branch, and tags.
 
-- [ ] [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-- [ ] [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-- [ ] [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-- [ ] [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-- [ ] [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+**Blocking needs one project setting.** Tick **Settings -> Merge requests ->
+"Pipelines must succeed"**. Without it a red pipeline is only a red icon next to
+a live merge button.
 
-## Test and Deploy
+## Profiles
 
-Use the built-in continuous integration in GitLab.
+| Profile | For |
+| --- | --- |
+| `profiles/library.yml` | Go modules that ship no container image: aioz-common, aioz-config, aioz-logger, aioz-stats, go-sdk. Also the right profile for the *checks* of a repository whose release flow is out of scope, such as a binary published over FTP. |
 
-- [ ] [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/)
-- [ ] [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-- [ ] [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-- [ ] [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-- [ ] [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
+A `service` profile (image, migrate, deploy, rollback) comes once the library
+profile is proven. It will build on the same hidden jobs.
 
-***
+Always name a profile, never a `jobs/` file. The `jobs/` layout is internal and
+may be rearranged within a major version.
 
-# Editing this README
+## Why validate does not block
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+Every `validate:*` job sets `allow_failure: true`, so a finding is a yellow
+warning on the pipeline and in the merge request, and does not stop the merge.
 
-## Suggestions for a good README
+This is deliberate and temporary. The older libraries carry a backlog of
+findings nobody has triaged, and govulncheck in particular reports transitive
+vulnerabilities that cannot be fixed from the repository reporting them - it has
+no ignore file, so such a finding cannot even be suppressed. Blocking today
+would leave those pipelines permanently red, which teaches people to ignore the
+whole stage. That is the exact failure this template exists to remove.
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+A repository that has cleared its findings should enforce them, one job at a
+time:
 
-## Name
-Choose a self-explaining name for your project.
+```yaml
+validate:gitleaks:
+  allow_failure: false
+```
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+`lint` and `test` block today and have no such switch.
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+This is a per-job override rather than a `VALIDATE_ALLOW_FAILURE` variable
+because GitLab requires `allow_failure` to be a boolean literal. A
+variable-driven switch means duplicating every ref rule into a blocking and a
+warning variant; one line per job reads honestly on the pipeline page.
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+## Variables
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+Override any of these in your own top-level `variables:` block, which takes
+precedence over the included defaults.
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+| Variable | Default | Note |
+| --- | --- | --- |
+| `GO_IMAGE` | `registry:5000/go:1.25` | Must be go1.25.13+. govulncheck checks the standard library too, and go1.25.8 has ten reachable stdlib vulnerabilities. |
+| `GOLANGCI_LINT_VERSION` | `v2.12.2` | Must be v2.x. A v2-schema `.golangci.yml` is rejected by a v1 binary. |
+| `GOVULNCHECK_VERSION` | `v1.7.0` | Newest release that runs on Go 1.25. Move it with `GO_IMAGE`. |
+| `GITLEAKS_IMAGE` | digest-pinned v8.30.1 | |
+| `TRIVY_IMAGE` | digest-pinned 0.74.0 | |
+| `HADOLINT_IMAGE` | digest-pinned v2.15.1 | |
+| `BUILD_TAGS` | *(empty)* | Build tags the repository compiles under, e.g. `purego`. The `-tags` flag is omitted entirely when empty. |
+| `RUNNER_TAG` | `linux` | |
+| `GIT_SUBMODULE_STRATEGY` | `none` | Submodules are separate modules with their own pipelines. |
+| `TRIVY_SKIP_DIRS` | `.cache` | Comma-separated. |
+| `GO_PRIVATE_HOSTS` | `gitlab.internal/,10.0.0.50/` | Used only by `.aioz-go-private`. |
+| `GENERATE_VERIFY_CMD` | *(empty)* | Run first in `test`. Should fail if generated output (swagger, proto) is stale. Unset means skipped. |
+| `TEST_BUILD_CMD` | *(empty)* | Run second in `test`. Should compile test code behind build tags `go test` skips. Unset means skipped. |
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+No Makefile is required. The jobs call the tools directly, so a repository with
+no Makefile at all can adopt the profile as-is. `GENERATE_VERIFY_CMD` and
+`TEST_BUILD_CMD` are how a repository that *has* those targets wires them in.
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+## Private Go modules
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+Repositories importing a module from `gitlab.internal` or `10.0.0.50` must opt
+into the credential setup, because most repositories need nothing:
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+```yaml
+lint:
+  before_script:
+    - !reference [.aioz-go-private, before_script]
+    - !reference [.aioz-lint, before_script]
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+test:
+  before_script:
+    - !reference [.aioz-go-private, before_script]
+    - !reference [.aioz-test, before_script]
+```
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+Order matters: the credentials must be in place before the job's own `go list`
+fetch runs.
 
-## License
-For open source projects, say how it is licensed.
+The project owning the private module must also allowlist the consuming project
+under **Settings -> CI/CD -> Job token permissions -> Allowlist**, or the clone
+returns 403 with a message that does not mention the allowlist.
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+## Adding repository-specific jobs
+
+Keep them in your own `.gitlab-ci.yml` and extend the shared hidden jobs:
+
+```yaml
+stages: [lint, validate, test, integration]   # must list the shared three too
+
+integration:
+  extends: .aioz-test
+  stage: integration
+  script:
+    - go test -race -timeout 20m ./redis/... ./postgres/...
+```
+
+**`stages:` replaces, it does not merge.** A repository adding a stage must
+declare the shared three as well, or the shared jobs land in an undeclared
+stage and the pipeline fails to create.
+
+**`rules:` replaces too.** The shared jobs run on merge requests, the default
+branch, and tags. A repository needing other refs - `aioz-stream` also uses
+`develop*` and `stag` - redefines `rules:` on the job and must list every ref it
+wants, including those three.
+
+## Hidden jobs
+
+| Name | Holds |
+| --- | --- |
+| `.aioz-rules` | The ref rules: merge requests, default branch, tags |
+| `.aioz-go-private` | `before_script` for private-module credentials (opt-in) |
+| `.aioz-lint` | Image, Go and lint caches, golangci-lint install and config verify |
+| `.aioz-validate` | Stage, runner tag, and `allow_failure: true` |
+| `.aioz-test` | Image, `CGO_ENABLED=1`, test cache, module fetch |
+
+## No YAML anchors
+
+Nothing in `jobs/` or `profiles/` uses a YAML anchor (`&name`) or alias
+(`*name`), and the repository's own pipeline fails if one appears.
+
+Anchors are resolved by the YAML parser before GitLab merges anything, so an
+alias cannot see an anchor defined in another file. A template using one works
+inside its own repository and breaks silently the moment a consumer includes it
+- the key simply goes missing. `extends:` and `!reference` are resolved after
+the merge and do work across files.
+
+## Versioning
+
+Tags are semver and consumers pin an exact tag. `main` is not a supported `ref:`
+for a consumer: a change to it would reach every repository unreviewed.
+
+| Change | Bump |
+| --- | --- |
+| A job renamed or removed, a variable's meaning changed, a check made blocking | major |
+| A job or profile added, a tool version bumped, a new variable with a default | minor |
+| A comment, a doc fix, a bug fix that changes no interface | patch |
+
+`v0.x` means the interface may still move on a minor bump while the library
+profile is being proven. `v1.0.0` follows the first successful pilot.
+
+## Developing
+
+```sh
+yamllint -c .yamllint.yml .gitlab-ci.yml jobs/ profiles/
+grep -rnE '(^|[[:space:]])[&*][A-Za-z_]' jobs/ profiles/   # must find nothing
+glab ci lint                                               # if glab is installed
+```
+
+The repository's own pipeline runs all three, plus GitLab's CI Lint endpoint
+against every profile expanded exactly as a consumer would get it. That last
+check needs a PAT with `api` scope in the masked CI/CD variable
+`CI_LINT_TOKEN`; without it the job explains itself and passes.
