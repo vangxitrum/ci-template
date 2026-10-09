@@ -13,7 +13,7 @@ The standard these jobs implement is written up in
 # .gitlab-ci.yml
 include:
   - project: tuan.quang.tran/aioz-ci-template
-    ref: v0.1.0
+    ref: v1.0.0
     file: profiles/library.yml
 ```
 
@@ -39,6 +39,7 @@ a live merge button.
 | Profile | For |
 | --- | --- |
 | `profiles/library.yml` | Go modules that ship no container image: aioz-common, aioz-config, aioz-logger, aioz-stats, go-sdk. Also the right profile for the *checks* of a repository whose release flow is out of scope, such as a binary published over FTP. |
+| `profiles/checks.yml` | The four `validate:*` scanners and nothing else, for a repository whose lint and test jobs are its own - depin, whose lint preflights a six-project private module graph and keeps no cache on purpose. The repository keeps its own `stages:` and must list `validate` among them. |
 
 A `service` profile (image, migrate, deploy, rollback) comes once the library
 profile is proven. It will build on the same hidden jobs.
@@ -177,8 +178,9 @@ for a consumer: a change to it would reach every repository unreviewed.
 | A job or profile added, a tool version bumped, a new variable with a default | minor |
 | A comment, a doc fix, a bug fix that changes no interface | patch |
 
-`v0.x` means the interface may still move on a minor bump while the library
-profile is being proven. `v1.0.0` follows the first successful pilot.
+`v1.0.0` is the first release. The job names, the hidden job names and the
+variables above are the interface: a change to any of them that an existing
+consumer would notice is a major bump.
 
 ## Developing
 

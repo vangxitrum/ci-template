@@ -8,7 +8,7 @@
 #
 #   include:
 #     - project: tuan.quang.tran/aioz-ci-template
-#       ref: v0.1.0
+#       ref: v1.0.0
 #       file: profiles/library.yml
 #
 # That is the whole file for a repository that needs nothing else. See README.md

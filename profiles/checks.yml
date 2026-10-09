@@ -1,0 +1,27 @@
+# The checks profile: the four scanners, and nothing else.
+#
+# For a repository whose lint and test jobs are its own - because they do
+# something the shared ones cannot. depin is the case this was written for: its
+# lint job preflights a private module graph across six projects and names the
+# ones whose job-token allowlist is missing, and it deliberately keeps no
+# cache, because a restored lint cache once reported findings against file
+# paths from another checkout. Neither belongs in a shared job, and neither is
+# a reason to go without govulncheck, gitleaks, trivy and hadolint.
+#
+# Usage, in the consuming repository's .gitlab-ci.yml:
+#
+#   include:
+#     - project: tuan.quang.tran/aioz-ci-template
+#       ref: v1.1.0
+#       file: profiles/checks.yml
+#
+# The repository keeps its own `stages:` list and must include `validate` in
+# it: GitLab replaces a redefined `stages:` rather than merging it.
+#
+# Prefer profiles/library.yml where the shared lint and test jobs do fit. This
+# profile is the smaller promise: scanners only.
+
+include:
+  - local: jobs/base.yml
+  - local: jobs/go-private.yml
+  - local: jobs/validate.yml
