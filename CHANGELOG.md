@@ -1,6 +1,18 @@
 # Changelog
 
-## v0.1.0 - unreleased
+## Unreleased
+
+### Added
+
+**`profiles/checks.yml`: the scanners, without the lint and test jobs.** A
+repository whose own lint job does something the shared one cannot - depin
+preflights a private module graph across six projects, names the ones whose
+job-token allowlist is missing, and keeps no cache on purpose - had to choose
+between that job and the whole template. It now takes `validate:*` alone and
+keeps its own lint and test.
+
+
+## v1.0.0 - 2026-09-18
 
 First release. A `library` profile with `validate`, `lint` and `test` for Go
 repositories that ship no container image.
